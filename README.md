@@ -75,6 +75,26 @@ python3 main.py
 
 ```
 
+## Batch CLI
+
+You can process a directory of images from the command line using the provided `batch_cli.py` script. It loads the depth model once and generates depth maps and SBS images for every image in the input directory.
+
+Example:
+
+```bash
+python3 batch_cli.py \
+    --input-dir input/images \
+    --output-dir output \
+    --model depth_anything_v2_vitl_fp16.safetensors \
+    --depthmap-input-scale 0.75 \
+    --sbs-method mesh_warping \
+    --sbs-mode parallel \
+    --sbs-depth-scale 40 \
+    --sbs-depth-blur-strength 7
+```
+
+Outputs (depth maps and SBS images) are written to the directory specified by `--output-dir`.
+
 
 
 | **Parameter** | **Description** |
