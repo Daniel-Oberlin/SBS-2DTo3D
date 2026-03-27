@@ -171,10 +171,23 @@ def generate_sbs_image_from_depth(original_input_image, depth_map_pil, model_nam
         return None
 
 
-def find_image_files(input_dir):
+def find_image_files(input_dir, recursive=False):
     exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
-    files = [os.path.join(input_dir, f) for f in sorted(os.listdir(input_dir)) if os.path.splitext(f.lower())[1] in exts]
-    return files
+    results = []
+    if recursive:
+        for dirpath, dirnames, filenames in os.walk(input_dir):
+            rel_dir = os.path.relpath(dirpath, input_dir)
+            if rel_dir == '.':
+                rel_dir = ''
+            for f in sorted(filenames):
+                if os.path.splitext(f.lower())[1] in exts:
+                    results.append((os.path.join(dirpath, f), rel_dir))
+    else:
+        for f in sorted(os.listdir(input_dir)):
+            full = os.path.join(input_dir, f)
+            if os.path.isfile(full) and os.path.splitext(f.lower())[1] in exts:
+                results.append((full, ''))
+    return results
 
 
 def main():
@@ -184,6 +197,7 @@ def main():
     parser.add_argument('--model', default=AVAILABLE_MODELS[4] if len(AVAILABLE_MODELS) > 4 else AVAILABLE_MODELS[0], choices=AVAILABLE_MODELS)
     parser.add_argument('--models-dir', default='models/depthanything')
     parser.add_argument('--depthmap-input-scale', type=float, default=0.75)
+    parser.add_argument('--recursive', action='store_true', help='Recursively traverse input directory and preserve subdirectory structure in output-dir')
     parser.add_argument('--write-depthmap', action='store_true', help='Write grayscale depth map files to the output directory')
     parser.add_argument('--sbs-method', choices=['mesh_warping', 'grid_sampling'], default='mesh_warping')
     parser.add_argument('--sbs-mode', choices=['parallel', 'cross-eyed'], default='parallel')
@@ -208,7 +222,7 @@ def main():
     # Load model once
     depth_model, dtype, is_metric = load_model(args.model, device, args.models_dir)
 
-    files = find_image_files(args.input_dir)
+    files = find_image_files(args.input_dir, recursive=args.recursive)
     if not files:
         print('No image files found in input directory.')
         return
@@ -218,7 +232,7 @@ def main():
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    for img_path in files:
+    for img_path, rel_dir in files:
         print(f"Processing {img_path}...")
         try:
             img = Image.open(img_path).convert('RGB')
@@ -227,6 +241,10 @@ def main():
             continue
 
         base_name = os.path.splitext(os.path.basename(img_path))[0]
+
+        # determine output subdirectory and create it
+        out_subdir = args.output_dir if not rel_dir else os.path.join(args.output_dir, rel_dir)
+        os.makedirs(out_subdir, exist_ok=True)
 
         # create working copy and downscale for depth model if requested
         image_for_depth_processing = img.copy()
@@ -246,14 +264,14 @@ def main():
             dtype,
             is_metric,
             base_name,
-            args.output_dir,
+            out_subdir,
             write_depthmap=args.write_depthmap,
         )
 
         sbs_pil = generate_sbs_image_from_depth(img, depth_pil, args.model, args.sbs_method, args.sbs_depth_scale, args.sbs_mode, args.sbs_depth_blur_strength)
 
         if sbs_pil is not None:
-            sbs_out = os.path.join(args.output_dir, f"{base_name}_sbs.png")
+            sbs_out = os.path.join(out_subdir, f"{base_name}_sbs.png")
             sbs_pil.save(sbs_out)
             print(f"Saved SBS image to: {sbs_out}")
         else:
