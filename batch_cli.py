@@ -199,6 +199,7 @@ def main():
     parser.add_argument('--depthmap-input-scale', type=float, default=0.75)
     parser.add_argument('--recursive', action='store_true', help='Recursively traverse input directory and preserve subdirectory structure in output-dir')
     parser.add_argument('--write-depthmap', action='store_true', help='Write grayscale depth map files to the output directory')
+    parser.add_argument('--write-depthmap-only', action='store_true', help='Only write depth map files and skip generating SBS images')
     parser.add_argument('--sbs-method', choices=['mesh_warping', 'grid_sampling'], default='mesh_warping')
     parser.add_argument('--sbs-mode', choices=['parallel', 'cross-eyed'], default='parallel')
     parser.add_argument('--sbs-depth-scale', type=int, default=40)
@@ -257,6 +258,8 @@ def main():
 
         image_tensor = transform_normalize(image_for_depth_processing).unsqueeze(0).to(device=device, dtype=dtype)
 
+        write_map = args.write_depthmap or args.write_depthmap_only
+
         depth_pil = process_depthmap_image(
             depth_model,
             image_tensor,
@@ -265,8 +268,12 @@ def main():
             is_metric,
             base_name,
             out_subdir,
-            write_depthmap=args.write_depthmap,
+            write_depthmap=write_map,
         )
+
+        if args.write_depthmap_only:
+            print(f"--write-depthmap-only set; skipping SBS generation for {img_path}.")
+            continue
 
         sbs_pil = generate_sbs_image_from_depth(img, depth_pil, args.model, args.sbs_method, args.sbs_depth_scale, args.sbs_mode, args.sbs_depth_blur_strength)
 
