@@ -11,6 +11,9 @@ generates depth maps (optionally downscaling input for the depth model) and prod
 import argparse
 import os
 import time
+import tempfile
+import shutil
+import subprocess
 import torch
 import torch.nn.functional as F
 from torchvision import transforms
@@ -19,6 +22,8 @@ import numpy as np
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file as load_safetensors
 import matplotlib as mpl
+import cv2
+import imageio
 
 from depth_anything_v2.dpt import DepthAnythingV2
 from sbs.sbs import process_image_sbs
@@ -190,6 +195,171 @@ def find_image_files(input_dir, recursive=False):
     return results
 
 
+def find_video_files(input_dir, recursive=False):
+    exts = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'}
+    results = []
+    if recursive:
+        for dirpath, dirnames, filenames in os.walk(input_dir):
+            rel_dir = os.path.relpath(dirpath, input_dir)
+            if rel_dir == '.':
+                rel_dir = ''
+            for f in sorted(filenames):
+                if os.path.splitext(f.lower())[1] in exts:
+                    results.append((os.path.join(dirpath, f), rel_dir))
+    else:
+        for f in sorted(os.listdir(input_dir)):
+            full = os.path.join(input_dir, f)
+            if os.path.isfile(full) and os.path.splitext(f.lower())[1] in exts:
+                results.append((full, ''))
+    return results
+
+
+def process_video(video_path, out_subdir, base_name, depth_model, device, dtype, is_metric,
+                  args):
+    """Process a single video file: extract frames, run depth+SBS on each, reassemble."""
+    print(f"\nProcessing video: {video_path}")
+
+    temp_parent_dir = tempfile.mkdtemp(prefix="sbs_video_")
+    frames_orig_dir = os.path.join(temp_parent_dir, "frames_orig")
+    frames_depth_dir = os.path.join(temp_parent_dir, "frames_depth")
+    frames_sbs_dir = os.path.join(temp_parent_dir, "frames_sbs")
+    os.makedirs(frames_orig_dir, exist_ok=True)
+    os.makedirs(frames_depth_dir, exist_ok=True)
+    os.makedirs(frames_sbs_dir, exist_ok=True)
+    print(f"Temp directory: {temp_parent_dir}")
+
+    final_output_video_path = os.path.join(out_subdir, f"{base_name}_sbs.mp4")
+    print(f"Output directory: {out_subdir}")
+
+    try:
+        # --- Video info & audio extraction ---
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps == 0:
+            print("Warning: Could not determine FPS. Defaulting to 25.")
+            fps = 25.0
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        print(f"Video: {frame_count} frames @ {fps:.3f} FPS")
+
+        temp_audio_path = os.path.join(temp_parent_dir, "audio.aac")
+        audio_extracted = False
+        try:
+            ffprobe_cmd = [
+                'ffprobe', '-v', 'error', '-select_streams', 'a',
+                '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', video_path
+            ]
+            probe_result = subprocess.run(ffprobe_cmd, capture_output=True, text=True, check=False)
+            if probe_result.returncode == 0 and probe_result.stdout.strip():
+                cmd_extract_audio = ['ffmpeg', '-y', '-i', video_path, '-vn', '-acodec', 'copy', temp_audio_path]
+                subprocess.run(cmd_extract_audio, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                audio_extracted = True
+                print("Audio extracted successfully.")
+            else:
+                print("No audio stream found in video.")
+        except subprocess.CalledProcessError as e:
+            print(f"ffmpeg audio extraction error: {e.stderr.decode() if e.stderr else 'unknown'}")
+        except FileNotFoundError:
+            print("ffmpeg/ffprobe not found. Audio will not be included in output.")
+
+        # --- Frame extraction ---
+        print(f"Extracting frames...")
+        actual_frames = 0
+        for i in range(frame_count if frame_count > 0 else 2**31):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            cv2.imwrite(os.path.join(frames_orig_dir, f"frame_{i:06d}.png"), frame)
+            actual_frames += 1
+        cap.release()
+        print(f"Extracted {actual_frames} frames.")
+
+        if actual_frames == 0:
+            print(f"Error: No frames could be extracted from {video_path}. Skipping.")
+            return
+
+        # --- Per-frame depth + SBS ---
+        transform_normalize = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+        orig_frame_files = sorted([f for f in os.listdir(frames_orig_dir) if f.endswith(".png")])
+        for frame_idx, frame_filename in enumerate(orig_frame_files):
+            frame_path = os.path.join(frames_orig_dir, frame_filename)
+            frame_base = os.path.splitext(frame_filename)[0]
+            print(f"  Frame {frame_idx + 1}/{len(orig_frame_files)}: {frame_filename}")
+
+            input_pil = Image.open(frame_path).convert("RGB")
+
+            frame_for_depth = input_pil.copy()
+            if args.depthmap_input_scale < 1.0:
+                ow, oh = frame_for_depth.size
+                nw = max(1, int(ow * args.depthmap_input_scale))
+                nh = max(1, int(oh * args.depthmap_input_scale))
+                frame_for_depth = frame_for_depth.resize((nw, nh), Image.Resampling.BICUBIC)
+
+            image_tensor = transform_normalize(frame_for_depth).unsqueeze(0).to(device=device, dtype=dtype)
+
+            depth_pil = process_depthmap_image(
+                depth_model, image_tensor, device, dtype, is_metric,
+                frame_base, frames_depth_dir, write_depthmap=False,
+            )
+
+            sbs_pil = generate_sbs_image_from_depth(
+                input_pil, depth_pil, args.model,
+                args.sbs_method, args.sbs_depth_scale, args.sbs_mode, args.sbs_depth_blur_strength,
+            )
+            if sbs_pil:
+                sbs_pil.save(os.path.join(frames_sbs_dir, f"sbs_{frame_base}.png"))
+            else:
+                print(f"  Warning: SBS generation failed for frame {frame_filename}. Skipping frame.")
+
+        # --- Assemble output video ---
+        sbs_frame_files = sorted([
+            os.path.join(frames_sbs_dir, f)
+            for f in os.listdir(frames_sbs_dir)
+            if f.startswith("sbs_") and f.endswith(".png")
+        ])
+
+        if not sbs_frame_files:
+            print(f"Error: No SBS frames generated for {video_path}. Cannot assemble video.")
+            return
+
+        sbs_no_audio_path = os.path.join(temp_parent_dir, "sbs_no_audio.mp4")
+        print(f"Assembling {len(sbs_frame_files)} SBS frames into video...")
+        with imageio.get_writer(sbs_no_audio_path, fps=fps, codec='libx264',
+                                ffmpeg_params=['-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p']) as writer:
+            for sbs_frame_file in sbs_frame_files:
+                writer.append_data(imageio.imread(sbs_frame_file))
+
+        # --- Mux audio ---
+        if audio_extracted and os.path.exists(temp_audio_path) and os.path.getsize(temp_audio_path) > 0:
+            print(f"Muxing audio into output video...")
+            cmd_mux = [
+                'ffmpeg', '-y', '-i', sbs_no_audio_path, '-i', temp_audio_path,
+                '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', '-shortest',
+                final_output_video_path
+            ]
+            mux_result = subprocess.run(cmd_mux, capture_output=True, text=True, check=False)
+            if mux_result.returncode != 0:
+                print(f"ffmpeg mux error: {mux_result.stderr}\nFalling back to video without audio.")
+                shutil.move(sbs_no_audio_path, final_output_video_path)
+            else:
+                print("Audio muxed successfully.")
+        else:
+            shutil.move(sbs_no_audio_path, final_output_video_path)
+
+        print(f"Saved SBS video to: {final_output_video_path}")
+
+    except Exception as e:
+        import traceback
+        print(f"Error processing video {video_path}: {e}")
+        traceback.print_exc()
+    finally:
+        if os.path.exists(temp_parent_dir):
+            shutil.rmtree(temp_parent_dir)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Batch SBS CLI")
     parser.add_argument('--input-dir', required=True)
@@ -226,7 +396,6 @@ def main():
     files = find_image_files(args.input_dir, recursive=args.recursive)
     if not files:
         print('No image files found in input directory.')
-        return
 
     transform_normalize = transforms.Compose([
         transforms.ToTensor(),
@@ -246,6 +415,7 @@ def main():
         # determine output subdirectory and create it
         out_subdir = args.output_dir if not rel_dir else os.path.join(args.output_dir, rel_dir)
         os.makedirs(out_subdir, exist_ok=True)
+        print(f"Output directory: {out_subdir}")
 
         # create working copy and downscale for depth model if requested
         image_for_depth_processing = img.copy()
@@ -283,6 +453,19 @@ def main():
             print(f"Saved SBS image to: {sbs_out}")
         else:
             print(f"Failed to generate SBS for {img_path}")
+
+    # --- Process video files ---
+    video_files = find_video_files(args.input_dir, recursive=args.recursive)
+    if video_files:
+        print(f"\nFound {len(video_files)} video file(s) to process.")
+        for vid_path, rel_dir in video_files:
+            base_name = os.path.splitext(os.path.basename(vid_path))[0]
+            out_subdir = args.output_dir if not rel_dir else os.path.join(args.output_dir, rel_dir)
+            os.makedirs(out_subdir, exist_ok=True)
+            print(f"Output directory: {out_subdir}")
+            process_video(vid_path, out_subdir, base_name, depth_model, device, dtype, is_metric, args)
+    else:
+        print("\nNo video files found in input directory.")
 
     print("Batch processing complete.")
 
