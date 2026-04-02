@@ -328,7 +328,7 @@ def process_video(video_path, out_subdir, base_name, depth_model, device, dtype,
         sbs_no_audio_path = os.path.join(temp_parent_dir, "sbs_no_audio.mp4")
         print(f"Assembling {len(sbs_frame_files)} SBS frames into video...")
         with imageio.get_writer(sbs_no_audio_path, fps=fps, codec='libx264',
-                                ffmpeg_params=['-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p']) as writer:
+                                ffmpeg_params=['-preset', 'medium', '-crf', str(args.crf), '-pix_fmt', 'yuv420p']) as writer:
             for sbs_frame_file in sbs_frame_files:
                 writer.append_data(imageio.imread(sbs_frame_file))
 
@@ -374,6 +374,7 @@ def main():
     parser.add_argument('--sbs-mode', choices=['parallel', 'cross-eyed'], default='parallel')
     parser.add_argument('--sbs-depth-scale', type=int, default=40)
     parser.add_argument('--sbs-depth-blur-strength', type=int, default=7)
+    parser.add_argument('--crf', type=int, default=23, help='Video encoding quality (0-51): lower = better quality/larger file, 0 = lossless, 23 = default, 51 = worst')
 
     args = parser.parse_args()
 
