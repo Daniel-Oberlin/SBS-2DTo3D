@@ -128,7 +128,7 @@ def process_depthmap_image(model, image_tensor, device, dtype, is_metric, output
     return depth_image
 
 
-def generate_sbs_image_from_depth(original_input_image, depth_map_pil, model_name, sbs_method, sbs_depth_scale, sbs_mode, sbs_depth_blur_strength):
+def generate_sbs_image_from_depth(original_input_image, depth_map_pil, model_name, sbs_method, sbs_depth_scale, sbs_mode, sbs_depth_blur_strength, sbs_convergence=0.5):
     if original_input_image is None or depth_map_pil is None or model_name is None:
         print("Missing image, depth map, or model name for SBS generation.")
         return None
@@ -167,6 +167,7 @@ def generate_sbs_image_from_depth(original_input_image, depth_map_pil, model_nam
             depth_scale=sbs_depth_scale,
             mode=sbs_mode,
             depth_blur_strength=sbs_depth_blur_strength,
+            convergence=sbs_convergence,
         )
 
         sbs_image_pil = transforms.ToPILImage()(sbs_image_tensor.squeeze(0).cpu().permute(2, 0, 1))
@@ -308,6 +309,7 @@ def process_video(video_path, out_subdir, base_name, depth_model, device, dtype,
             sbs_pil = generate_sbs_image_from_depth(
                 input_pil, depth_pil, args.model,
                 args.sbs_method, args.sbs_depth_scale, args.sbs_mode, args.sbs_depth_blur_strength,
+                args.sbs_convergence,
             )
             if sbs_pil:
                 sbs_pil.save(os.path.join(frames_sbs_dir, f"sbs_{frame_base}.png"))
@@ -362,18 +364,19 @@ def process_video(video_path, out_subdir, base_name, depth_model, device, dtype,
 
 def main():
     parser = argparse.ArgumentParser(description="Batch SBS CLI")
-    parser.add_argument('--input-dir', required=True)
-    parser.add_argument('--output-dir', required=True)
-    parser.add_argument('--model', default=AVAILABLE_MODELS[4] if len(AVAILABLE_MODELS) > 4 else AVAILABLE_MODELS[0], choices=AVAILABLE_MODELS)
-    parser.add_argument('--models-dir', default='models/depthanything')
-    parser.add_argument('--depthmap-input-scale', type=float, default=0.75)
+    parser.add_argument('--input-dir', required=True, help='Directory containing input images or videos')
+    parser.add_argument('--output-dir', required=True, help='Directory to write output SBS files')
+    parser.add_argument('--model', default=AVAILABLE_MODELS[4] if len(AVAILABLE_MODELS) > 4 else AVAILABLE_MODELS[0], choices=AVAILABLE_MODELS, help='Depth model to use. vitl = most accurate/slowest, vitb = balanced, vits = fastest/least accurate. fp16 = faster on GPU, fp32 = more precise')
+    parser.add_argument('--models-dir', default='models/depthanything', help='Directory where model weights are stored (downloaded here if missing)')
+    parser.add_argument('--depthmap-input-scale', type=float, default=0.75, help='Scale factor applied to input before depth estimation (0.5-1.0). Lower = faster/less VRAM, slightly less depth detail. Output resolution is unaffected')
     parser.add_argument('--recursive', action='store_true', help='Recursively traverse input directory and preserve subdirectory structure in output-dir')
     parser.add_argument('--write-depthmap', action='store_true', help='Write grayscale depth map files to the output directory')
     parser.add_argument('--write-depthmap-only', action='store_true', help='Only write depth map files and skip generating SBS images')
-    parser.add_argument('--sbs-method', choices=['mesh_warping', 'grid_sampling'], default='mesh_warping')
-    parser.add_argument('--sbs-mode', choices=['parallel', 'cross-eyed'], default='parallel')
-    parser.add_argument('--sbs-depth-scale', type=int, default=40)
-    parser.add_argument('--sbs-depth-blur-strength', type=int, default=7)
+    parser.add_argument('--sbs-method', choices=['mesh_warping', 'grid_sampling'], default='mesh_warping', help='Stereo rendering method. mesh_warping = smoother, more natural depth with curved distortion (recommended). grid_sampling = faster, simpler pixel shifting')
+    parser.add_argument('--sbs-mode', choices=['parallel', 'cross-eyed'], default='parallel', help='Viewing mode. parallel = normal side-by-side for 3D displays/HMDs. cross-eyed = for free-viewing without a display')
+    parser.add_argument('--sbs-depth-scale', type=int, default=40, help='Strength of the 3D depth effect (10-100). 10-20 = subtle, 21-50 = balanced (recommended), 50-100 = strong, >100 = usually too much (ghosting/stretching)')
+    parser.add_argument('--sbs-depth-blur-strength', type=int, default=7, help='Blur applied to depth map transitions (odd integers 3-15). Higher = smoother depth edges with less flickering, at some cost to fine depth detail')
+    parser.add_argument('--sbs-convergence', type=float, default=0.5, help='Stereo convergence (0.0-1.0): shifts the zero-disparity plane. 0.0 = far plane at screen depth (near objects pop out most), 0.5 = mid-depth at screen depth (balanced), 1.0 = near plane at screen depth (most depth inset)')
     parser.add_argument('--crf', type=int, default=23, help='Video encoding quality (0-51): lower = better quality/larger file, 0 = lossless, 23 = default, 51 = worst')
 
     args = parser.parse_args()
@@ -446,7 +449,7 @@ def main():
             print(f"--write-depthmap-only set; skipping SBS generation for {img_path}.")
             continue
 
-        sbs_pil = generate_sbs_image_from_depth(img, depth_pil, args.model, args.sbs_method, args.sbs_depth_scale, args.sbs_mode, args.sbs_depth_blur_strength)
+        sbs_pil = generate_sbs_image_from_depth(img, depth_pil, args.model, args.sbs_method, args.sbs_depth_scale, args.sbs_mode, args.sbs_depth_blur_strength, args.sbs_convergence)
 
         if sbs_pil is not None:
             sbs_out = os.path.join(out_subdir, f"{base_name}_sbs.png")

@@ -198,7 +198,7 @@ def map_torch_dtype_to_numpy(torch_dtype):
 # ======================= Main Processing Functions =======================
 # =========================================================================
 # IMAGE - GRID SAMPLING
-def process_image_sbs_grid_sampling(device, base_image, depth_map, depth_scale, mode="parallel", depth_blur_strength=7):
+def process_image_sbs_grid_sampling(device, base_image, depth_map, depth_scale, mode="parallel", depth_blur_strength=7, convergence=0.0):
     """
     Create a side-by-side (SBS) stereoscopic image using grid_sampling method
     This implementation uses efficient vectorized operations for better performance.       
@@ -257,7 +257,8 @@ def process_image_sbs_grid_sampling(device, base_image, depth_map, depth_scale, 
     
     # Calculate disparity (pixel shift)
     # disparity = depth_map_resized * (depth_scale / w)
-    disparity = depth_map * 255.0 * (depth_scale / w)
+    # This 255.0 constant is not explained, but upstread code in run_gradio probably depends on it
+    disparity = (depth_map - convergence) * 255.0 * (depth_scale / w)
 
     # Get cached coordinate grid
     y_grid, x_grid = get_grid_gs(h, w, target_dtype, device)
@@ -323,7 +324,7 @@ def process_image_sbs_grid_sampling(device, base_image, depth_map, depth_scale, 
 
 
 # IMAGE - MSH WARPING
-def process_image_sbs_mesh_warping(device, base_image, depth_map, depth_scale=30, mode="parallel", depth_blur_strength=7):
+def process_image_sbs_mesh_warping(device, base_image, depth_map, depth_scale=30, mode="parallel", depth_blur_strength=7, convergence=0.0):
     """
     Creates a side-by-side stereoscopic image using simple mesh warping method
     
@@ -388,7 +389,9 @@ def process_image_sbs_mesh_warping(device, base_image, depth_map, depth_scale=30
     # Assumes depth map is normalized: white (1.0) = near, black (0.0) = far.
     # Using depth directly as disparity makes nearby objects shift more,
     # creating a natural stereoscopic effect.
-    disparity = depth_map
+    # Convergence shifts the zero-disparity plane: 0.0 = far plane at screen depth,
+    # 0.5 = mid-depth at screen depth (near objects pop out), 1.0 = near plane at screen depth.
+    disparity = depth_map - convergence
 
     base_grid = get_cached_grid_mw(H, W, target_dtype, device)
     grid = base_grid.unsqueeze(0).expand(B, H, W, 2)
@@ -456,7 +459,7 @@ def process_image_sbs_mesh_warping(device, base_image, depth_map, depth_scale=30
 # ========================================================================================
 # MAIN FUNCTION - IMAGE
 # ========================================================================================
-def process_image_sbs(base_image, depth_map, method="mesh_warping", depth_scale=40, mode="parallel", depth_blur_strength=7):
+def process_image_sbs(base_image, depth_map, method="mesh_warping", depth_scale=40, mode="parallel", depth_blur_strength=7, convergence=0.0):
     
     # base_image: The main image to convert to a side-by-side 3D image
     # depth_map: Grayscale depth map where brighter areas appear closer and darker areas further away
@@ -471,9 +474,9 @@ def process_image_sbs(base_image, depth_map, method="mesh_warping", depth_scale=
 
     result = None 
     if method == "grid_sampling":
-        result = process_image_sbs_grid_sampling(device, base_image, depth_map, depth_scale, mode, depth_blur_strength)
+        result = process_image_sbs_grid_sampling(device, base_image, depth_map, depth_scale, mode, depth_blur_strength, convergence)
     elif method == "mesh_warping":            
-        result = process_image_sbs_mesh_warping(device, base_image, depth_map, depth_scale, mode, depth_blur_strength)
+        result = process_image_sbs_mesh_warping(device, base_image, depth_map, depth_scale, mode, depth_blur_strength, convergence)
  
     return result # Return the stored result
 
