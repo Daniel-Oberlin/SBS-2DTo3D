@@ -86,10 +86,10 @@ python3 batch_cli.py \
     --input-dir input/images \
     --output-dir output \
     --model depth_anything_v2_vitl_fp16.safetensors \
-    --depthmap-input-scale 0.75 \
+    --depthmap-input-scale 0.5 \
     --sbs-method mesh_warping \
     --sbs-mode parallel \
-    --sbs-depth-scale 40 \
+    --sbs-depth-scale 80 \
     --sbs-depth-blur-strength 7
 ```
 

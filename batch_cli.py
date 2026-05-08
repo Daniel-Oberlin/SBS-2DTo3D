@@ -3,7 +3,7 @@
 
 Usage:
   python3 batch_cli.py --input-dir input_images --output-dir output --model depth_anything_v2_vitl_fp16.safetensors \
-    --depthmap-input-scale 0.5 --sbs-method mesh_warping --sbs-mode parallel --sbs-depth-scale 40 --sbs-depth-blur-strength 7
+    --depthmap-input-scale 0.5 --sbs-method mesh_warping --sbs-mode parallel --sbs-depth-scale 80 --sbs-depth-blur-strength 7
 
 This script loads the depth model once, iterates over image files in the input directory,
 generates depth maps (optionally downscaling input for the depth model) and produces SBS images.
@@ -374,7 +374,7 @@ def main():
     parser.add_argument('--write-depthmap-only', action='store_true', help='Only write depth map files and skip generating SBS images')
     parser.add_argument('--sbs-method', choices=['mesh_warping', 'grid_sampling'], default='mesh_warping', help='Stereo rendering method. mesh_warping = smoother, more natural depth with curved distortion (recommended). grid_sampling = faster, simpler pixel shifting')
     parser.add_argument('--sbs-mode', choices=['parallel', 'cross-eyed'], default='parallel', help='Viewing mode. parallel = normal side-by-side for 3D displays/HMDs. cross-eyed = for free-viewing without a display')
-    parser.add_argument('--sbs-depth-scale', type=int, default=40, help='Strength of the 3D depth effect (10-100). 10-20 = subtle, 21-50 = balanced (recommended), 50-100 = strong, >100 = usually too much (ghosting/stretching)')
+    parser.add_argument('--sbs-depth-scale', type=int, default=80, help='Strength of the 3D depth effect (10-100). 10-20 = subtle, 21-50 = balanced (recommended), 50-100 = strong, >100 = usually too much (ghosting/stretching)')
     parser.add_argument('--sbs-depth-blur-strength', type=int, default=7, help='Blur applied to depth map transitions (odd integers 3-15). Higher = smoother depth edges with less flickering, at some cost to fine depth detail')
     parser.add_argument('--sbs-convergence', type=float, default=0.5, help='Stereo convergence (0.0-1.0): shifts the zero-disparity plane. 0.0 = far plane at screen depth (near objects pop out most), 0.5 = mid-depth at screen depth (balanced), 1.0 = near plane at screen depth (most depth inset)')
     parser.add_argument('--crf', type=int, default=23, help='Video encoding quality (0-51): lower = better quality/larger file, 0 = lossless, 23 = default, 51 = worst')
