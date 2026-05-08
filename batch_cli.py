@@ -3,7 +3,7 @@
 
 Usage:
   python3 batch_cli.py --input-dir input_images --output-dir output --model depth_anything_v2_vitl_fp16.safetensors \
-    --depthmap-input-scale 0.75 --sbs-method mesh_warping --sbs-mode parallel --sbs-depth-scale 40 --sbs-depth-blur-strength 7
+    --depthmap-input-scale 0.5 --sbs-method mesh_warping --sbs-mode parallel --sbs-depth-scale 40 --sbs-depth-blur-strength 7
 
 This script loads the depth model once, iterates over image files in the input directory,
 generates depth maps (optionally downscaling input for the depth model) and produces SBS images.
@@ -368,7 +368,7 @@ def main():
     parser.add_argument('--output-dir', required=True, help='Directory to write output SBS files')
     parser.add_argument('--model', default=AVAILABLE_MODELS[4] if len(AVAILABLE_MODELS) > 4 else AVAILABLE_MODELS[0], choices=AVAILABLE_MODELS, help='Depth model to use. vitl = most accurate/slowest, vitb = balanced, vits = fastest/least accurate. fp16 = faster on GPU, fp32 = more precise')
     parser.add_argument('--models-dir', default='models/depthanything', help='Directory where model weights are stored (downloaded here if missing)')
-    parser.add_argument('--depthmap-input-scale', type=float, default=0.75, help='Scale factor applied to input before depth estimation (0.5-1.0). Lower = faster/less VRAM, slightly less depth detail. Output resolution is unaffected')
+    parser.add_argument('--depthmap-input-scale', type=float, default=0.5, help='Scale factor applied to input before depth estimation (0.5-1.0). Lower = faster/less VRAM, slightly less depth detail. Output resolution is unaffected')
     parser.add_argument('--recursive', action='store_true', help='Recursively traverse input directory and preserve subdirectory structure in output-dir')
     parser.add_argument('--write-depthmap', action='store_true', help='Write grayscale depth map files to the output directory')
     parser.add_argument('--write-depthmap-only', action='store_true', help='Only write depth map files and skip generating SBS images')
